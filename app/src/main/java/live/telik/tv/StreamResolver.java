@@ -290,6 +290,9 @@ final class StreamResolver {
         try {
             SSLParameters params = ssl.getSSLParameters();
             params.setServerNames(Collections.singletonList(new SNIHostName(host)));
+            // A raw SSLSocket does not check the hostname unless asked, which
+            // would accept any valid certificate for the port.
+            params.setEndpointIdentificationAlgorithm("HTTPS");
             ssl.setSSLParameters(params);
         } catch (Exception ignored) {
             // SNI is best-effort; the handshake below still validates the cert.
