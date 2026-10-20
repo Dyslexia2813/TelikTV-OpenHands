@@ -13,10 +13,29 @@
 
 Ничего лишнего: одна Activity, чёрный фон, один `SurfaceView`.
 
+Если что-то не запускается, приложение показывает причину текстом по центру
+экрана и пишет подробности в logcat под тегом `TelikTV`:
+
+```bash
+adb logcat -s TelikTV
+```
+
 ## Требования
 
 - Android 7.0+ (API 24), landscape, управление с пульта.
 - Интернет.
+
+## TLS на Android 7.0
+
+Поток отдаётся по HTTPS с сертификатом Let's Encrypt, цепочка которого
+завершается корнем `ISRG Root X1`. Android 7.0 этот корень ещё не содержит
+(он появился только в 7.1.1), поэтому на части приставок все HTTPS-запросы
+падают на этапе рукопожатия — визуально это выглядит как чёрный экран.
+
+Чтобы это не зависело от версии прошивки, корни `ISRG Root X1` и `ISRG Root X2`
+лежат в `app/src/main/res/raw/` и добавляются к системным через
+`res/xml/network_security_config.xml`. Дополнительно `TlsTrust` собирает
+объединённое хранилище для собственных сокетов резолвера.
 
 ## Сборка
 
@@ -69,7 +88,11 @@ Release-APK подписан debug-ключом, чтобы его можно б
 
 ```
 app/src/main/java/live/telik/tv/
-├── MainActivity.java     — плеер, ретраи, immersive, wake lock
-└── StreamResolver.java   — получение ссылки на поток
+├── MainActivity.java     — плеер, ретраи, immersive, wake lock, диагностика
+├── StreamResolver.java   — получение ссылки на поток (raw-socket HTTP)
+└── TlsTrust.java         — объединённое хранилище корней для резолвера
+
+app/src/main/res/raw/     — корневые сертификаты ISRG (Let's Encrypt)
+app/src/main/res/xml/     — network security config
 ```
 

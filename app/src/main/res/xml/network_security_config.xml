@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The channel's CDN hosts use Let's Encrypt's 2025 chain, rooted in ISRG Root X1.
+  Android 7.0 does not ship that root as a trust anchor, so the ISRG roots are
+  bundled in res/raw and added alongside the platform anchors here. This covers
+  every HttpsURLConnection in the process, including ExoPlayer's data source.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/isrg_root_x1" />
+            <certificates src="@raw/isrg_root_x2" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

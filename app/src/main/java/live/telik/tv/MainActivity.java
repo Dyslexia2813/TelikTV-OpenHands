@@ -9,12 +9,15 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.util.Log;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
@@ -23,6 +26,7 @@ import androidx.media3.common.Player;
 import androidx.media3.common.VideoSize;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
@@ -36,6 +40,8 @@ import java.util.concurrent.Executors;
  */
 public class MainActivity extends Activity implements Player.Listener {
 
+    private static final String TAG = "TelikTV";
+
     private static final long RETRY_MIN_MS = 2_000L;
     private static final long RETRY_MAX_MS = 30_000L;
     private static final long WATCHDOG_MS = 10_000L;
@@ -44,6 +50,7 @@ public class MainActivity extends Activity implements Player.Listener {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
 
     private AspectSurfaceView surface;
+    private TextView statusView;
     private ExoPlayer player;
     private PowerManager.WakeLock wakeLock;
 
@@ -52,6 +59,7 @@ public class MainActivity extends Activity implements Player.Listener {
     private boolean started;
     private long lastProgressMs;
     private long lastPosition = -1L;
+    private boolean playing;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,6 +75,17 @@ public class MainActivity extends Activity implements Player.Listener {
         lp.gravity = Gravity.CENTER;
         surface.setLayoutParams(lp);
         root.addView(surface);
+
+        statusView = new TextView(this);
+        statusView.setTextColor(Color.WHITE);
+        statusView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
+        statusView.setGravity(Gravity.CENTER);
+        statusView.setPadding(48, 48, 48, 48);
+        statusView.setVisibility(View.GONE);
+        root.addView(statusView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER));
+
         setContentView(root);
 
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -76,6 +95,16 @@ public class MainActivity extends Activity implements Player.Listener {
         registerNetworkCallback();
         started = true;
         start();
+    }
+
+    /** Shows a plain status message. Hidden entirely while playback is healthy. */
+    private void showStatus(String message) {
+        statusView.setText(message);
+        statusView.setVisibility(View.VISIBLE);
+    }
+
+    private void hideStatus() {
+        statusView.setVisibility(View.GONE);
     }
 
     @Override
@@ -101,20 +130,37 @@ public class MainActivity extends Activity implements Player.Listener {
             return;
         }
         resolving = true;
+        if (!playing) {
+            showStatus("Подключение к потоку…");
+        }
         worker.execute(() -> {
             try {
-                String url = StreamResolver.resolve();
+                String url = StreamResolver.resolve(sslSocketFactory());
+                Log.i(TAG, "resolved stream: " + url);
                 handler.post(() -> {
                     resolving = false;
                     play(url);
                 });
             } catch (Exception e) {
+                Log.e(TAG, "resolve failed", e);
+                String detail = e.getClass().getSimpleName()
+                        + (e.getMessage() != null ? ": " + e.getMessage() : "");
                 handler.post(() -> {
                     resolving = false;
+                    showStatus("Не удалось получить поток\n" + detail
+                            + "\nПовтор через " + (retryDelay / 1000) + " с");
                     scheduleRetry();
                 });
             }
         });
+    }
+
+    private javax.net.ssl.SSLSocketFactory sslSocketFactory() {
+        try {
+            return TlsTrust.socketFactory(this);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private void play(String url) {
@@ -128,12 +174,19 @@ public class MainActivity extends Activity implements Player.Listener {
                 .build();
 
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setUserAgent("TelikTV/1.0")
+                .setUserAgent(StreamResolver.UA)
                 .setConnectTimeoutMs(10_000)
                 .setReadTimeoutMs(15_000)
                 .setAllowCrossProtocolRedirects(true);
 
-        player = new ExoPlayer.Builder(this)
+        // Let ExoPlayer fall back to software decoding when the box's hardware
+        // decoder rejects the stream; cheap SoCs often advertise profiles they
+        // cannot actually decode.
+        DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                .setEnableDecoderFallback(true);
+
+        player = new ExoPlayer.Builder(this, renderers)
                 .setLoadControl(loadControl)
                 .build();
 
@@ -220,6 +273,13 @@ public class MainActivity extends Activity implements Player.Listener {
         }
     }
 
+    /** Fires only once real pixels reach the surface, so the status hides on visible video. */
+    @Override
+    public void onRenderedFirstFrame() {
+        playing = true;
+        hideStatus();
+    }
+
     @Override
     public void onVideoSizeChanged(VideoSize videoSize) {
         if (videoSize.width > 0 && videoSize.height > 0) {
@@ -233,6 +293,16 @@ public class MainActivity extends Activity implements Player.Listener {
 
     @Override
     public void onPlayerError(PlaybackException error) {
+        Log.e(TAG, "playback error " + error.getErrorCodeName(), error);
+        String cause = error.getCause() != null
+                ? error.getCause().getClass().getSimpleName()
+                + (error.getCause().getMessage() != null
+                        ? ": " + error.getCause().getMessage() : "")
+                : "";
+        showStatus("Ошибка воспроизведения\n"
+                + error.getErrorCodeName()
+                + (cause.isEmpty() ? "" : "\n" + cause)
+                + "\nПовтор через " + (retryDelay / 1000) + " с");
         scheduleRetry();
     }
 

@@ -34,6 +34,37 @@ Note: requests from datacenter IPs to `cdntvmedia.com` get 403 unless the
   plays them directly (it follows the 302 automatically).
 
 
+## TLS
+
+The stream chain terminates in Let's Encrypt's `ISRG Root X1`.
+
+- Android 7.0 (API 24) does **not** ship that root as a trust anchor — it
+  arrived in 7.1.1. On a 7.0 build every HTTPS request fails during the
+  handshake and the player shows only a black screen.
+- Many TV boxes advertise Android 9/10 while actually running a 7.x build, so
+  never assume the platform trust store is complete.
+- Fix: `app/src/main/res/raw/isrg_root_x{1,2}.pem` are declared in
+  `res/xml/network_security_config.xml` (covers ExoPlayer's
+  `HttpURLConnection`), and `TlsTrust` merges them with the platform roots for
+  the resolver's own raw sockets.
+- `StreamResolver.fetch` uses a raw socket, not `HttpURLConnection`: Android
+  may silently drop restricted headers such as `Referer`, which turns an
+  expected 200 into a 403 with no other symptom.
+
+## Debugging a black screen
+
+The app was originally mute — every failure ended in a silent retry loop, so a
+black screen gave no information. It now shows the reason on screen and logs
+under tag `TelikTV`:
+
+```bash
+adb logcat -s TelikTV
+```
+
+The status text hides only on `onRenderedFirstFrame`, not on `STATE_READY`:
+`STATE_READY` means the player has enough data to start, not that pixels
+reached the surface, so hiding on it can mask a decode failure.
+
 ## Conventions
 
 - Keep the app minimal: single Activity, no menus, black background,
