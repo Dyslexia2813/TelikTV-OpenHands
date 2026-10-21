@@ -20,6 +20,14 @@
 adb logcat -s TelikTV
 ```
 
+## Скачать готовый APK
+
+[**TelikTV 1.1 — release (~1.1 МБ)**](https://github.com/Dyslexia2813/TelikTV-OpenHands/releases/download/v1.1/TelikTV-1.1.apk)
+
+[Debug-сборка (подробные логи)](https://github.com/Dyslexia2813/TelikTV-OpenHands/releases/download/v1.1/TelikTV-1.1-debug.apk)
+
+Все сборки: [Releases](https://github.com/Dyslexia2813/TelikTV-OpenHands/releases).
+
 ## Требования
 
 - Android 7.0+ (API 24), landscape, управление с пульта.
