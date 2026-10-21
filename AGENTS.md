@@ -65,6 +65,28 @@ The status text hides only on `onRenderedFirstFrame`, not on `STATE_READY`:
 `STATE_READY` means the player has enough data to start, not that pixels
 reached the surface, so hiding on it can mask a decode failure.
 
+## Distributing the APK
+
+The APK must be served from somewhere that outlives the session. A local
+`python3 -m http.server` behind the session URL works only while the session
+is alive; when the environment resets, `/tmp` is wiped and the session URL
+starts returning 502 Bad Gateway.
+
+Publish to GitHub Releases instead:
+
+```bash
+curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://api.github.com/repos/<owner>/<repo>/releases \
+  -d '{"tag_name":"v1.1","target_commitish":"main","name":"...","body":"..."}'
+curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Content-Type: application/vnd.android.package-archive" \
+  --data-binary "@app/build/outputs/apk/release/app-release.apk" \
+  "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=TelikTV-1.1.apk"
+```
+
+Build outputs under `/workspace/...` survive an environment reset; `/tmp` does
+not.
+
 ## Conventions
 
 - Keep the app minimal: single Activity, no menus, black background,
