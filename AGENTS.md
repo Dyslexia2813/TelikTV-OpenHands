@@ -136,8 +136,9 @@ ever a session-wide summary is wanted instead of a hand-rolled counter.
 ### Measured result on the actual box
 
 MXQ Pro 4K, `OMX.allwinner.video.decoder.avc`, `avc1.4D4028`, 1920x1080:
-hardware decoding confirmed, zero dropped frames over a two-minute run, buffer
-steady at 14-20 s. Playback is not limited by the box's hardware.
+hardware decoding confirmed, 1 dropped frame over a two-minute run (~3000
+frames at 25 fps), buffer steady at 14-20 s. Playback is not limited by the
+box's hardware.
 
 ## Distributing the APK
 
