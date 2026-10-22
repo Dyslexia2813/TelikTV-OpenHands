@@ -33,6 +33,25 @@ Note: requests from datacenter IPs to `cdntvmedia.com` get 403 unless the
 - The stream m3u8 and its `.ts` segments need no Referer or UA — ExoPlayer
   plays them directly (it follows the 302 automatically).
 
+### The two hostnames are mirrors, not qualities
+
+`tvcdnpotok.com` and `tvlife.live` serve byte-identical segments (same md5 for
+the same segment), so switching between them changes resilience, not picture
+quality. Both are tried automatically; the D-pad left/right override just
+picks which one is attempted first.
+
+### There is only one quality level
+
+The playlist is a media playlist with no `EXT-X-STREAM-INF`, so there are no
+quality variants to select. Probed and 404: `master.m3u8`, `2025/index_hd`,
+`2025_720`, `2025/1080`, `2025_hd`, `hd/2025`. Changing the User-Agent changes
+nothing (VLC's UA gets 404; a browser UA and a "PeersTV-like" UA get the same
+247-byte playlist). Measured stream: H.264 Main@4.0, 1920x1080 progressive
+4:2:0, roughly 3-5 Mbit/s VBR. Softness on motion is a source limitation.
+
+Do not try to extract streams from the PeersTV app. It is a separate licensed
+service (ООО «Инетра») with its own CDN and auth; bypassing it is out of scope.
+
 
 ## TLS
 
@@ -77,15 +96,52 @@ Publish to GitHub Releases instead:
 ```bash
 curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   https://api.github.com/repos/<owner>/<repo>/releases \
-  -d '{"tag_name":"v1.1","target_commitish":"main","name":"...","body":"..."}'
+  -d '{"tag_name":"v1.2","target_commitish":"main","name":"...","body":"..."}'
 curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Content-Type: application/vnd.android.package-archive" \
   --data-binary "@app/build/outputs/apk/release/app-release.apk" \
-  "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=TelikTV-1.1.apk"
+  "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=TelikTV-1.2.apk"
 ```
 
 Build outputs under `/workspace/...` survive an environment reset; `/tmp` does
 not.
+
+### Rebuilding after an environment reset
+
+JDK and the Android SDK are not part of the image and are lost on reset. The
+Gradle distribution under `/workspace/tools/gradle-8.7` does survive. To
+restore a build:
+
+```bash
+sudo -n apt-get update -qq
+sudo -n apt-get install -y -qq openjdk-21-jdk-headless unzip
+
+sudo -n mkdir -p /opt/android-sdk/cmdline-tools
+curl -sSL -o /tmp/cmdtools.zip \
+  https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+unzip -q -o /tmp/cmdtools.zip -d /tmp/cmdtools-extract
+sudo -n cp -r /tmp/cmdtools-extract/cmdline-tools \
+  /opt/android-sdk/cmdline-tools/latest
+sudo -n chown -R "$(id -un):$(id -gn)" /opt/android-sdk
+
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export ANDROID_HOME=/opt/android-sdk
+yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_HOME" \
+  "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+/workspace/tools/gradle-8.7/bin/gradle :app:assembleRelease --no-daemon
+```
+
+Note `/opt` is root-owned, so the SDK needs `sudo` to create; the `chown`
+afterwards lets Gradle write into it.
+
+`StreamResolver` is free of Android imports, so it can be compiled and run on
+a desktop JVM to verify the resolution chain without a device:
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+$JAVA_HOME/bin/javac -d /tmp/rt live/telik/tv/StreamResolver.java
+```
 
 ## Conventions
 

@@ -60,6 +60,15 @@ final class StreamResolver {
     }
 
     /**
+     * Resolves the stream URL, preferring the first mirror.
+     *
+     * @see #resolve(SSLSocketFactory, int)
+     */
+    static String resolve(SSLSocketFactory socketFactory) throws Exception {
+        return resolve(socketFactory, 0).url;
+    }
+
+    /**
      * Resolves the stream URL and returns the address the CDN finally serves.
      *
      * <p>Returning the post-redirect URL matters: the playlist lists segments as
@@ -67,10 +76,16 @@ final class StreamResolver {
      * component that the original URL lacks, so resolving a segment against the
      * original URL yields a 404.
      *
+     * <p>The player advertises the same stream under several hostnames. They are
+     * interchangeable, so {@code preferredIndex} only chooses which one to try
+     * first; the rest stay as fallbacks and are reported in {@link Resolved} so
+     * the UI can offer a manual override.
+     *
      * @param socketFactory TLS factory used for every request, or null for the
      *                      process default.
+     * @param preferredIndex mirror to try first, taken modulo the mirror count.
      */
-    static String resolve(SSLSocketFactory socketFactory) throws Exception {
+    static Resolved resolve(SSLSocketFactory socketFactory, int preferredIndex) throws Exception {
         String playerUrl = findPlayerUrl(socketFactory);
         String js = fetch(playerUrl, "https://cdntvmedia.com/", "iframe", socketFactory).body;
         Matcher m = GENERATED_FILE.matcher(js);
@@ -84,15 +99,34 @@ final class StreamResolver {
                 candidates.add(url);
             }
         }
+        int count = candidates.size();
+        if (count == 0) {
+            throw new Exception("no stream URL found");
+        }
         Exception last = null;
-        for (String candidate : candidates) {
+        for (int i = 0; i < count; i++) {
+            int index = Math.floorMod(preferredIndex + i, count);
             try {
-                return fetch(candidate, null, null, socketFactory).finalUrl;
+                String url = fetch(candidates.get(index), null, null, socketFactory).finalUrl;
+                return new Resolved(url, index, count);
             } catch (Exception e) {
                 last = e;
             }
         }
-        throw last != null ? last : new Exception("no stream URL found");
+        throw last;
+    }
+
+    /** A resolved stream plus which mirror served it, for the manual override. */
+    static final class Resolved {
+        final String url;
+        final int index;
+        final int count;
+
+        Resolved(String url, int index, int count) {
+            this.url = url;
+            this.index = index;
+            this.count = count;
+        }
     }
 
     private static String findPlayerUrl(SSLSocketFactory socketFactory) {

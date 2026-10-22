@@ -22,9 +22,9 @@ adb logcat -s TelikTV
 
 ## Скачать готовый APK
 
-[**TelikTV 1.1 — release (~1.1 МБ)**](https://github.com/Dyslexia2813/TelikTV-OpenHands/releases/download/v1.1/TelikTV-1.1.apk)
+[**TelikTV 1.2 — release (~1.1 МБ)**](https://github.com/Dyslexia2813/TelikTV-OpenHands/releases/download/v1.2/TelikTV-1.2.apk)
 
-[Debug-сборка (подробные логи)](https://github.com/Dyslexia2813/TelikTV-OpenHands/releases/download/v1.1/TelikTV-1.1-debug.apk)
+[Debug-сборка (подробные логи)](https://github.com/Dyslexia2813/TelikTV-OpenHands/releases/download/v1.2/TelikTV-1.2-debug.apk)
 
 Все сборки: [Releases](https://github.com/Dyslexia2813/TelikTV-OpenHands/releases).
 
@@ -44,6 +44,26 @@ adb logcat -s TelikTV
 лежат в `app/src/main/res/raw/` и добавляются к системным через
 `res/xml/network_security_config.xml`. Дополнительно `TlsTrust` собирает
 объединённое хранилище для собственных сокетов резолвера.
+
+## Переключение потока (зеркал)
+
+Плеер отдаёт один и тот же канал под двумя адресами:
+
+```
+tvcdnpotok.com/2025/index.m3u8?wmsAuthSign=…  или  tvlife.live/2025/index.m3u8?wmsAuthSign=…
+```
+
+Это **не разные качества** — сегменты с обоих адресов побайтово идентичны
+(совпадает md5). Это две точки входа на один CDN, поэтому переключение между
+ними влияет на устойчивость, а не на картинку.
+
+- **Автоматически:** если первый адрес не отвечает, приложение само берёт второй.
+- **Вручную:** кнопки **влево / вправо** на пульте переключают адрес; выбранный
+  номер показывается в центре экрана и гаснет через 3 секунды.
+
+Сам поток — уже 1080p (H.264 Main@4.0, прогрессивный, 4:2:0) при битрейте
+≈3–5 Мбит/с. Вариантов качества у источника нет: плейлист не содержит
+`EXT-X-STREAM-INF`, а `master.m3u8` и подобные пути отдают 404.
 
 ## Сборка
 
@@ -91,6 +111,37 @@ Release-APK подписан debug-ключом, чтобы его можно б
 | Потеря сети | Ждём появления сети и запускаем заново |
 | Истечение токена | Ссылка перезапрашивается при каждом перезапуске |
 | Экран | Не гаснет (wake lock + FLAG_KEEP_SCREEN_ON) |
+| Влево / вправо | Ручное переключение адреса потока |
+
+## Диагностика через adb
+
+Логи приложения идут под тегом `TelikTV`:
+
+```bash
+adb connect <IP-приставки>:5555
+
+# живой лог только по приложению
+adb logcat -s TelikTV
+
+# очистить буфер и запустить приложение заново
+adb logcat -c
+adb shell am force-stop live.telik.tv
+adb shell monkey -p live.telik.tv -c android.intent.category.LAUNCHER 1
+
+# ошибки медиакодека (пропуск кадров, уход в программный декодер)
+adb logcat -s TelikTV MediaCodec VideoCapabilities OMXClient
+
+# состояние сети и DNS
+adb shell dumpsys connectivity | head -40
+```
+
+Что искать в выводе:
+
+- `resolved stream 1/2: https://…` — какой адрес выбран (ручное переключение
+  меняет эту цифру).
+- `playback error …` — код ошибки ExoPlayer с причиной.
+- `resolve failed …` — не удалось получить ссылку на поток.
+
 
 ## Структура
 

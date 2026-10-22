@@ -12,6 +12,7 @@ import android.os.PowerManager;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
@@ -45,21 +46,25 @@ public class MainActivity extends Activity implements Player.Listener {
     private static final long RETRY_MIN_MS = 2_000L;
     private static final long RETRY_MAX_MS = 30_000L;
     private static final long WATCHDOG_MS = 10_000L;
+    private static final long OVERLAY_HIDE_MS = 3_000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
 
     private AspectSurfaceView surface;
     private TextView statusView;
+    private TextView overlayView;
     private ExoPlayer player;
     private PowerManager.WakeLock wakeLock;
 
     private long retryDelay = RETRY_MIN_MS;
-    private boolean resolving;
     private boolean started;
     private long lastProgressMs;
     private long lastPosition = -1L;
     private boolean playing;
+    private int mirrorIndex;
+    private int mirrorCount;
+    private int resolveSeq;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,6 +91,18 @@ public class MainActivity extends Activity implements Player.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
 
+        overlayView = new TextView(this);
+        overlayView.setTextColor(Color.WHITE);
+        overlayView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+        overlayView.setGravity(Gravity.CENTER);
+        overlayView.setPadding(40, 24, 40, 24);
+        overlayView.setBackgroundColor(0x99000000);
+        overlayView.setVisibility(View.GONE);
+        FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER);
+        root.addView(overlayView, overlayParams);
+
         setContentView(root);
 
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -96,6 +113,41 @@ public class MainActivity extends Activity implements Player.Listener {
         started = true;
         start();
     }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (mirrorCount > 1) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                switchMirror(1);
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                switchMirror(-1);
+                return true;
+            }
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    /** Overrides the automatic mirror choice and restarts playback on it. */
+    private void switchMirror(int delta) {
+        mirrorIndex = Math.floorMod(mirrorIndex + delta, mirrorCount);
+        showOverlay("Поток " + (mirrorIndex + 1) + " из " + mirrorCount);
+        retryDelay = RETRY_MIN_MS;
+        releasePlayer();
+        handler.removeCallbacks(retryRunnable);
+        start();
+    }
+
+    /** Shows a message in the middle of the screen and fades it out again. */
+    private void showOverlay(String message) {
+        overlayView.setText(message);
+        overlayView.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(hideOverlay);
+        handler.postDelayed(hideOverlay, OVERLAY_HIDE_MS);
+    }
+
+    private final Runnable hideOverlay = () -> overlayView.setVisibility(View.GONE);
 
     /** Shows a plain status message. Hidden entirely while playback is healthy. */
     private void showStatus(String message) {
@@ -126,27 +178,34 @@ public class MainActivity extends Activity implements Player.Listener {
     }
 
     private void start() {
-        if (resolving) {
-            return;
-        }
-        resolving = true;
+        int seq = ++resolveSeq;
         if (!playing) {
             showStatus("Подключение к потоку…");
         }
         worker.execute(() -> {
             try {
-                String url = StreamResolver.resolve(sslSocketFactory());
-                Log.i(TAG, "resolved stream: " + url);
+                StreamResolver.Resolved resolved =
+                        StreamResolver.resolve(sslSocketFactory(), mirrorIndex);
+                Log.i(TAG, "resolved stream " + (resolved.index + 1) + "/" + resolved.count
+                        + ": " + resolved.url);
                 handler.post(() -> {
-                    resolving = false;
-                    play(url);
+                    if (seq != resolveSeq) {
+                        return;
+                    }
+
+                    mirrorIndex = resolved.index;
+                    mirrorCount = resolved.count;
+                    play(resolved.url);
                 });
             } catch (Exception e) {
                 Log.e(TAG, "resolve failed", e);
                 String detail = e.getClass().getSimpleName()
                         + (e.getMessage() != null ? ": " + e.getMessage() : "");
                 handler.post(() -> {
-                    resolving = false;
+                    if (seq != resolveSeq) {
+                        return;
+                    }
+
                     showStatus("Не удалось получить поток\n" + detail
                             + "\nПовтор через " + (retryDelay / 1000) + " с");
                     scheduleRetry();
@@ -229,9 +288,16 @@ public class MainActivity extends Activity implements Player.Listener {
         }
         handler.removeCallbacks(watchdog);
         releasePlayer();
-        handler.postDelayed(this::start, retryDelay);
+        handler.removeCallbacks(retryRunnable);
+        handler.postDelayed(retryRunnable, retryDelay);
         retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
     }
+
+    /**
+     * Stable instance so {@code removeCallbacks} can actually cancel it; a
+     * method reference would allocate a fresh object per call and never match.
+     */
+    private final Runnable retryRunnable = this::start;
 
     private void releasePlayer() {
         handler.removeCallbacks(watchdog);
@@ -252,7 +318,7 @@ public class MainActivity extends Activity implements Player.Listener {
             public void onAvailable(Network network) {
                 handler.post(() -> {
                     if (player == null && started) {
-                        handler.removeCallbacks(MainActivity.this::start);
+                        handler.removeCallbacks(retryRunnable);
                         retryDelay = RETRY_MIN_MS;
                         start();
                     }
