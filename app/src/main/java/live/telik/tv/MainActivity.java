@@ -31,7 +31,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
-
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -47,6 +46,8 @@ public class MainActivity extends Activity implements Player.Listener {
     private static final long RETRY_MAX_MS = 30_000L;
     private static final long WATCHDOG_MS = 10_000L;
     private static final long OVERLAY_HIDE_MS = 3_000L;
+    private static final long DIAG_REFRESH_MS = 1_000L;
+    private static final long DIAG_AUTO_HIDE_MS = 60_000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -54,8 +55,14 @@ public class MainActivity extends Activity implements Player.Listener {
     private AspectSurfaceView surface;
     private TextView statusView;
     private TextView overlayView;
+    private TextView diagView;
     private ExoPlayer player;
     private PowerManager.WakeLock wakeLock;
+
+    private final Diagnostics diagnostics = new Diagnostics();
+    private final Runnable diagRefresh = this::refreshDiagnostics;
+    private boolean diagVisible;
+    private String currentUrl;
 
     private long retryDelay = RETRY_MIN_MS;
     private boolean started;
@@ -103,6 +110,19 @@ public class MainActivity extends Activity implements Player.Listener {
                 Gravity.CENTER);
         root.addView(overlayView, overlayParams);
 
+        diagView = new TextView(this);
+        diagView.setTextColor(Color.WHITE);
+        diagView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        diagView.setGravity(Gravity.START);
+        diagView.setPadding(40, 32, 40, 32);
+        diagView.setBackgroundColor(0xCC000000);
+        diagView.setVisibility(View.GONE);
+        FrameLayout.LayoutParams diagParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.START);
+        diagParams.setMargins(40, 40, 40, 40);
+        root.addView(diagView, diagParams);
+
         setContentView(root);
 
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -116,18 +136,74 @@ public class MainActivity extends Activity implements Player.Listener {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (isDiagnosticsKey(keyCode)) {
+            if (event.getRepeatCount() == 0) {
+                toggleDiagnostics();
+            }
+            return true;
+        }
         if (mirrorCount > 1) {
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                switchMirror(1);
+                if (event.getRepeatCount() == 0) {
+                    switchMirror(1);
+                }
                 return true;
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                switchMirror(-1);
+                if (event.getRepeatCount() == 0) {
+                    switchMirror(-1);
+                }
                 return true;
             }
         }
         return super.onKeyDown(keyCode, event);
     }
+
+    /**
+     * Several key codes are accepted because cheap box remotes vary a lot: some
+     * send INFO, some MENU, and many only have a plain OK button.
+     */
+    private static boolean isDiagnosticsKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_INFO
+                || keyCode == KeyEvent.KEYCODE_MENU
+                || keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                || keyCode == KeyEvent.KEYCODE_ENTER
+                || keyCode == KeyEvent.KEYCODE_BUTTON_A;
+    }
+
+    /**
+     * Toggles the diagnostics panel. While visible it refreshes on a timer so
+     * the dropped-frame and bandwidth numbers stay live, and it hides itself
+     * after a minute so an accidental press cannot leave it on screen forever.
+     */
+    private void toggleDiagnostics() {
+        handler.removeCallbacks(diagRefresh);
+        handler.removeCallbacks(diagHide);
+        diagVisible = !diagVisible;
+        if (diagVisible) {
+            diagView.setVisibility(View.VISIBLE);
+            refreshDiagnostics();
+        } else {
+            diagView.setVisibility(View.GONE);
+        }
+    }
+
+    private void refreshDiagnostics() {
+        if (!diagVisible) {
+            return;
+        }
+        diagView.setText(diagnostics.report(player, mirrorIndex, mirrorCount, currentUrl));
+        handler.removeCallbacks(diagRefresh);
+        handler.postDelayed(diagRefresh, DIAG_REFRESH_MS);
+        handler.removeCallbacks(diagHide);
+        handler.postDelayed(diagHide, DIAG_AUTO_HIDE_MS);
+    }
+
+    private final Runnable diagHide = () -> {
+        diagVisible = false;
+        handler.removeCallbacks(diagRefresh);
+        diagView.setVisibility(View.GONE);
+    };
 
     /** Overrides the automatic mirror choice and restarts playback on it. */
     private void switchMirror(int delta) {
@@ -224,6 +300,7 @@ public class MainActivity extends Activity implements Player.Listener {
 
     private void play(String url) {
         releasePlayer();
+        currentUrl = url;
         if (!wakeLock.isHeld()) {
             wakeLock.acquire();
         }
@@ -250,6 +327,7 @@ public class MainActivity extends Activity implements Player.Listener {
                 .build();
 
         player.addListener(this);
+        player.addAnalyticsListener(diagnostics);
         player.setVideoSurfaceView(surface);
         player.setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT);
         MediaSource source = new HlsMediaSource.Factory(http)

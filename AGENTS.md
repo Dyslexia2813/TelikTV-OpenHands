@@ -84,6 +84,30 @@ The status text hides only on `onRenderedFirstFrame`, not on `STATE_READY`:
 `STATE_READY` means the player has enough data to start, not that pixels
 reached the surface, so hiding on it can mask a decode failure.
 
+## Debugging without a computer
+
+The box is plugged into a TV, and `adb` over the network is usually disabled on
+these cheap boxes (no rooted build.prop, no developer menu), so logcat is often
+not reachable at all. The user cannot be expected to move the box or enable it.
+
+`Diagnostics.java` therefore puts the same facts on screen. The OK / Menu /
+Info key toggles a panel that refreshes once a second and auto-hides after a
+minute. Key codes are matched broadly (`KEYCODE_INFO`, `KEYCODE_MENU`,
+`KEYCODE_DPAD_CENTER`, `KEYCODE_ENTER`, `KEYCODE_BUTTON_A`) because box remotes
+vary; the repeat count is checked so a held key does not make the panel blink.
+
+The headline line is `Тип` — `аппаратный` or `программный`. A software decoder
+on this SoC means dropped frames, so that one word settles most quality
+questions. Decoder names carry their implementation: `OMX.google.` and
+`c2.android.`/`c2.google.` prefixes are software, anything else is vendor
+hardware. `DroppedVideoFrames` is cumulative, so the panel's `Пропуск` line
+shows a running total, not a rate.
+
+Everything comes from `AnalyticsListener` (`onVideoDecoderInitialized`,
+`onDroppedVideoFrames`, `onBandwidthEstimate`, `onLoadCompleted`) plus
+`ExoPlayer.getVideoFormat()`; no new dependency is needed, and the class is
+package-private to keep it out of the public surface.
+
 ## Distributing the APK
 
 The APK must be served from somewhere that outlives the session. A local
@@ -96,11 +120,11 @@ Publish to GitHub Releases instead:
 ```bash
 curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   https://api.github.com/repos/<owner>/<repo>/releases \
-  -d '{"tag_name":"v1.2","target_commitish":"main","name":"...","body":"..."}'
+  -d '{"tag_name":"v1.3","target_commitish":"main","name":"...","body":"..."}'
 curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Content-Type: application/vnd.android.package-archive" \
   --data-binary "@app/build/outputs/apk/release/app-release.apk" \
-  "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=TelikTV-1.2.apk"
+  "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=TelikTV-1.3.apk"
 ```
 
 Build outputs under `/workspace/...` survive an environment reset; `/tmp` does
