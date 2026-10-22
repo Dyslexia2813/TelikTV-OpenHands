@@ -100,13 +100,44 @@ The headline line is `Тип` — `аппаратный` or `программн�
 on this SoC means dropped frames, so that one word settles most quality
 questions. Decoder names carry their implementation: `OMX.google.` and
 `c2.android.`/`c2.google.` prefixes are software, anything else is vendor
-hardware. `DroppedVideoFrames` is cumulative, so the panel's `Пропуск` line
-shows a running total, not a rate.
+hardware.
 
 Everything comes from `AnalyticsListener` (`onVideoDecoderInitialized`,
 `onDroppedVideoFrames`, `onBandwidthEstimate`, `onLoadCompleted`) plus
 `ExoPlayer.getVideoFormat()`; no new dependency is needed, and the class is
 package-private to keep it out of the public surface.
+
+### Two AnalyticsListener traps
+
+Both were real bugs here, and both produce plausible-looking wrong output
+rather than an error, so they are worth remembering.
+
+1. `onDroppedVideoFrames(droppedFrames, elapsedMs)` is **not** cumulative. The
+   renderer calls `maybeNotifyDroppedFrames`, which emits the count and then
+   resets it to zero, so each callback carries only the frames dropped since the
+   previous callback. Storing the argument (the obvious reading) keeps just the
+   last burst — a real capture showed `1`, hiding every earlier drop. Sum it.
+   The `elapsedMs` argument is likewise the time since the counter was reset,
+   not a stall duration; showing it as "ms dropped" is meaningless (a capture
+   read `6957 ms` for a single frame).
+
+2. `getCurrentPosition()` returns `C.TIME_UNSET` (a large negative) for live
+   windows, and `C.TIME_UNSET` is also what `getCurrentLiveOffset()` returns
+   when unknown. A helper that clamps negatives to zero prints a confident
+   `00:00:00` that looks like a real position — a capture showed `Позиция:
+   00:00:06` and then `00:00:00` minutes later, which reads as the stream
+   restarting but is only the position becoming unknown. Render unknowns as a
+   dash.
+
+A useful consequence: `PlaybackStatsListener` (same artifact) exposes genuinely
+cumulative `totalDroppedFrames`, `totalRebufferCount` and `fatalErrorCount` if
+ever a session-wide summary is wanted instead of a hand-rolled counter.
+
+### Measured result on the actual box
+
+MXQ Pro 4K, `OMX.allwinner.video.decoder.avc`, `avc1.4D4028`, 1920x1080:
+hardware decoding confirmed, zero dropped frames over a two-minute run, buffer
+steady at 14-20 s. Playback is not limited by the box's hardware.
 
 ## Distributing the APK
 
@@ -120,11 +151,11 @@ Publish to GitHub Releases instead:
 ```bash
 curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   https://api.github.com/repos/<owner>/<repo>/releases \
-  -d '{"tag_name":"v1.3","target_commitish":"main","name":"...","body":"..."}'
+  -d '{"tag_name":"v1.4","target_commitish":"main","name":"...","body":"..."}'
 curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Content-Type: application/vnd.android.package-archive" \
   --data-binary "@app/build/outputs/apk/release/app-release.apk" \
-  "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=TelikTV-1.3.apk"
+  "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=TelikTV-1.4.apk"
 ```
 
 Build outputs under `/workspace/...` survive an environment reset; `/tmp` does

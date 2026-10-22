@@ -301,6 +301,7 @@ public class MainActivity extends Activity implements Player.Listener {
     private void play(String url) {
         releasePlayer();
         currentUrl = url;
+        diagnostics.onPlayerRestart();
         if (!wakeLock.isHeld()) {
             wakeLock.acquire();
         }

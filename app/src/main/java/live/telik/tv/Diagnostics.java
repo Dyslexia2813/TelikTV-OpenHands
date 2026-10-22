@@ -25,13 +25,14 @@ import java.util.Locale;
 final class Diagnostics implements AnalyticsListener {
 
     private volatile String decoderName;
-    private volatile long droppedFrames;
-    private volatile long droppedTimeMs;
+    private volatile long totalDroppedFrames;
+    private volatile long lastDropTimeMs;
     private volatile long bandwidthEstimate;
     private volatile long segmentBitrate;
     private volatile long throughputBytesPerSecond;
     private volatile int videoWidth;
     private volatile int videoHeight;
+    private volatile int restarts;
 
     @Override
     public void onVideoDecoderInitialized(EventTime eventTime, String decoderName,
@@ -39,10 +40,23 @@ final class Diagnostics implements AnalyticsListener {
         this.decoderName = decoderName;
     }
 
+    /**
+     * Counters are cumulative across the whole session, but the numbers in this
+     * callback are not: ExoPlayer resets its internal counter after every
+     * notification, so the value has to be summed rather than stored. The
+     * {@code elapsedMs} argument is deliberately ignored — it measures time
+     * since the counter was last reset, not the duration of the stall, and
+     * reading it as a stall length is misleading.
+     */
     @Override
     public void onDroppedVideoFrames(EventTime eventTime, int droppedFrames, long elapsedMs) {
-        this.droppedFrames = droppedFrames;
-        this.droppedTimeMs = elapsedMs;
+        totalDroppedFrames += droppedFrames;
+        lastDropTimeMs = System.currentTimeMillis();
+    }
+
+    /** Called on every (re)start of playback so the panel can show churn. */
+    void onPlayerRestart() {
+        restarts++;
     }
 
     @Override
@@ -113,8 +127,12 @@ final class Diagnostics implements AnalyticsListener {
         sb.append("Декодер:  ").append(decoderName != null ? decoderName : "не запущен").append('\n');
         sb.append("Тип:      ").append(decoderKind(decoderName)).append('\n');
 
-        sb.append("Пропуск:  ").append(droppedFrames).append(" кадр(ов), ")
-                .append(droppedTimeMs).append(" мс\n");
+        sb.append("Пропуск:  ").append(totalDroppedFrames).append(" кадр(ов) за сессию");
+        if (lastDropTimeMs > 0) {
+            sb.append(", последний ")
+                    .append(seconds(System.currentTimeMillis() - lastDropTimeMs)).append(" с назад");
+        }
+        sb.append('\n');
 
         if (bandwidthEstimate > 0) {
             sb.append("Сеть:     ").append(bandwidthEstimate / 1000).append(" kbps\n");
@@ -123,11 +141,27 @@ final class Diagnostics implements AnalyticsListener {
             sb.append("Загрузка: ").append(throughputBytesPerSecond * 8 / 1000).append(" kbps\n");
         }
 
-        sb.append("Буфер:    ").append(seconds(player.getBufferedPosition()
-                - player.getCurrentPosition())).append(" с\n");
-        sb.append("Позиция:  ").append(clock(player.getCurrentPosition())).append('\n');
-        sb.append("Состояние: ").append(stateName(player.getPlaybackState()))
-                .append(player.isPlaying() ? ", играет" : ", пауза").append('\n');
+        // getCurrentPosition() is C.TIME_UNSET for live windows, and clamping a
+        // negative to zero would print a confident "00:00:00" that looks like a
+        // real position, so unknowns are shown as a dash instead.
+        long position = player.getCurrentPosition();
+        long buffered = player.getBufferedPosition();
+        sb.append("Буфер:    ");
+        if (buffered >= 0 && position >= 0) {
+            sb.append(seconds(buffered - position)).append(" с");
+        } else {
+            sb.append("—");
+        }
+        sb.append('\n');
+        sb.append("Позиция:  ").append(position >= 0 ? clock(position) : "—");
+        if (player.isCurrentMediaItemLive() && player.getCurrentLiveOffset() != C.TIME_UNSET) {
+            sb.append("  (задержка эфира ").append(seconds(player.getCurrentLiveOffset()))
+                    .append(" с)");
+        }
+        sb.append('\n');
+        sb.append("Плеер:    ").append(stateName(player.getPlaybackState()))
+                .append(player.isPlaying() ? ", играет" : ", пауза")
+                .append(", перезапусков ").append(restarts).append('\n');
         sb.append("Дорожки:  ").append(trackSummary(player.getCurrentTracks()));
 
         return sb.toString();
@@ -174,6 +208,10 @@ final class Diagnostics implements AnalyticsListener {
                 return "аудио";
             case C.TRACK_TYPE_TEXT:
                 return "текст";
+            case C.TRACK_TYPE_IMAGE:
+                return "изображение";
+            case C.TRACK_TYPE_METADATA:
+                return "метаданные";
             default:
                 return "тип" + type;
         }
